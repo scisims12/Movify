@@ -1,0 +1,137 @@
+﻿package com.ivor.movify.data.remote
+
+import com.ivor.movify.data.remote.model.AnimeDetailsDto
+import com.ivor.movify.data.remote.model.AnimeDto
+import com.ivor.movify.data.remote.model.SeasonDetailsDto
+import com.ivor.movify.data.remote.model.TmdbResponse
+import com.ivor.movify.data.remote.model.KeywordDto
+import com.ivor.movify.data.remote.model.ExternalIdsDto
+import com.ivor.movify.data.remote.model.PersonDto
+import com.ivor.movify.data.remote.model.ContentRatingsDto
+import com.ivor.movify.data.remote.model.ReleaseDatesDto
+import retrofit2.http.GET
+import retrofit2.http.Path
+import retrofit2.http.Query
+import retrofit2.http.QueryMap
+
+interface TmdbApi {
+    /** Per-country certifications (US "PG", "R"...) for a movie. */
+    @GET("movie/{id}/release_dates")
+    suspend fun getMovieReleaseDates(@Path("id") id: Int): ReleaseDatesDto
+
+    /** Per-country TV ratings (US "TV-Y7", "TV-MA"...) for a show. */
+    @GET("tv/{id}/content_ratings")
+    suspend fun getTvContentRatings(@Path("id") id: Int): ContentRatingsDto
+
+    @GET("{media_type}/{id}/external_ids")
+    suspend fun getExternalIds(
+        @Path("media_type") mediaType: String,
+        @Path("id") id: Int
+    ): ExternalIdsDto
+
+    @GET("discover/movie")
+    suspend fun discoverMovie(
+        @Query("page") page: Int = 1,
+        @Query("sort_by") sortBy: String? = null,
+        @Query("with_genres") withGenres: String? = null,
+        @Query("with_keywords") withKeywords: String? = null
+    ): TmdbResponse<AnimeDto>
+
+    @GET("discover/tv")
+    suspend fun discoverTv(
+        @Query("page") page: Int = 1,
+        @Query("sort_by") sortBy: String? = null,
+        @Query("with_genres") withGenres: String? = null,
+        @Query("with_keywords") withKeywords: String? = null
+    ): TmdbResponse<AnimeDto>
+
+    @GET("trending/all/{time_window}")
+    suspend fun getTrendingAll(
+        @Path("time_window") timeWindow: String = "week",
+        @Query("page") page: Int = 1
+    ): TmdbResponse<AnimeDto>
+
+    @GET("tv/on_the_air")
+    suspend fun getOnTheAir(@Query("page") page: Int = 1): TmdbResponse<AnimeDto>
+
+    @GET("discover/tv")
+    suspend fun discoverTvWith(@QueryMap filters: Map<String, String>): TmdbResponse<AnimeDto>
+
+    @GET("discover/movie")
+    suspend fun discoverMovieWith(@QueryMap filters: Map<String, String>): TmdbResponse<AnimeDto>
+
+    @GET("search/keyword")
+    suspend fun searchKeyword(
+        @Query("query") query: String,
+        @Query("page") page: Int = 1
+    ): TmdbResponse<KeywordDto>
+    @GET("discover/tv")
+    suspend fun getPopularAnime(
+        @Query("page") page: Int = 1,
+        @Query("sort_by") sortBy: String = "popularity.desc",
+        @Query("with_genres") genres: String = "16", // Animation
+        @Query("with_original_language") language: String = "ja", // Anime usually
+        @Query("with_keywords") keywords: String = "210024|287501" // Optionally specify anime-specific keywords
+    ): TmdbResponse<AnimeDto>
+
+    @GET("trending/tv/{time_window}")
+    suspend fun getTrendingAnime(
+        @Path("time_window") timeWindow: String = "day",
+        @Query("page") page: Int = 1
+    ): TmdbResponse<AnimeDto>
+
+    @GET("tv/top_rated")
+    suspend fun getTopRatedAnime(
+        @Query("page") page: Int = 1,
+        @Query("language") language: String = "en-US"
+    ): TmdbResponse<AnimeDto>
+
+    @GET("tv/airing_today")
+    suspend fun getAiringTodayAnime(
+        @Query("page") page: Int = 1,
+        @Query("language") language: String = "en-US",
+        @Query("timezone") timezone: String = "America/New_York"
+    ): TmdbResponse<AnimeDto>
+
+    @GET("search/multi")
+    suspend fun searchMulti(
+        @Query("query") query: String,
+        @Query("page") page: Int = 1
+    ): TmdbResponse<AnimeDto>
+
+    @GET("search/movie")
+    suspend fun searchMovie(
+        @Query("query") query: String,
+        @Query("page") page: Int = 1
+    ): TmdbResponse<AnimeDto>
+
+    @GET("search/tv")
+    suspend fun searchTv(
+        @Query("query") query: String,
+        @Query("page") page: Int = 1
+    ): TmdbResponse<AnimeDto>
+
+    @GET("tv/{id}")
+    suspend fun getAnimeDetails(
+        @Path("id") id: Int,
+        @Query("append_to_response") appendToResponse: String = "videos"
+    ): AnimeDetailsDto
+
+    @GET("movie/{id}")
+    suspend fun getMovieDetails(
+        @Path("id") id: Int,
+        @Query("append_to_response") appendToResponse: String = "videos"
+    ): AnimeDetailsDto
+
+    @GET("tv/{id}/season/{season_number}")
+    suspend fun getSeasonDetails(
+        @Path("id") id: Int,
+        @Path("season_number") seasonNumber: Int
+    ): SeasonDetailsDto
+
+    @GET("person/{id}")
+    suspend fun getPerson(
+        @Path("id") id: Int,
+        @Query("append_to_response") appendToResponse: String = "combined_credits"
+    ): PersonDto
+}

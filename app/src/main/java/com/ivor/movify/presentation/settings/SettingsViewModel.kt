@@ -1,0 +1,211 @@
+﻿package com.ivor.movify.presentation.settings
+
+import android.content.Context
+import android.net.Uri
+import androidx.annotation.OptIn
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.offline.DownloadManager
+import coil3.SingletonImageLoader
+import com.ivor.movify.data.backup.BackupFormatException
+import com.ivor.movify.data.backup.LibraryBackup
+import com.ivor.movify.data.diagnostics.Diagnostics
+import com.ivor.movify.data.repository.HiddenTitlesRepository
+import com.ivor.movify.data.settings.AppSettings
+import com.ivor.movify.data.settings.AppSettingsStore
+import com.ivor.movify.data.settings.DnsProvider
+import com.ivor.movify.data.settings.PipAction
+import com.ivor.movify.data.settings.ThemeMode
+import com.ivor.movify.di.downloadRequirements
+import com.ivor.movify.domain.repository.ExtensionRepository
+import com.ivor.movify.domain.repository.WatchProgressRepository
+import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import javax.inject.Inject
+
+data class SettingsUiState(
+    val installedCount: Int = 0,
+    val enabledCount: Int = 0,
+    val availableCount: Int = 0,
+    val updateCount: Int = 0,
+    val repoCount: Int = 0,
+    val isSyncing: Boolean = false
+)
+
+@OptIn(UnstableApi::class)
+@HiltViewModel
+class SettingsViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val extensionRepository: ExtensionRepository,
+    private val appSettingsStore: AppSettingsStore,
+    private val downloadManager: DownloadManager,
+    private val watchProgressRepository: WatchProgressRepository,
+    private val hiddenTitlesRepository: HiddenTitlesRepository,
+    private val libraryBackup: LibraryBackup,
+    private val diagnostics: Diagnostics
+) : ViewModel() {
+
+    val state: StateFlow<SettingsUiState> = extensionRepository.catalog
+        .map { catalog ->
+            SettingsUiState(
+                installedCount = catalog.installed.size,
+                enabledCount = catalog.enabled.size,
+                availableCount = catalog.extensions.size,
+                updateCount = catalog.updatable.size,
+                repoCount = catalog.repos.size,
+                isSyncing = catalog.isSyncing
+            )
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
+
+    val appSettings: StateFlow<AppSettings> = appSettingsStore.settings
+
+    val hiddenTitleCount: StateFlow<Int> = hiddenTitlesRepository.count
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    private val _imageCacheBytes = MutableStateFlow<Long?>(null)
+    val imageCacheBytes: StateFlow<Long?> = _imageCacheBytes.asStateFlow()
+
+    private val _crashCount = MutableStateFlow(0)
+    val crashCount: StateFlow<Int> = _crashCount.asStateFlow()
+
+    /** True while a backup, restore or diagnostics export is writing or reading a file. */
+    private val _isWorking = MutableStateFlow(false)
+    val isWorking: StateFlow<Boolean> = _isWorking.asStateFlow()
+
+    private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val messages: SharedFlow<String> = _messages.asSharedFlow()
+
+    init {
+        refreshImageCacheSize()
+        viewModelScope.launch { _crashCount.value = withContext(Dispatchers.IO) { diagnostics.crashCount } }
+    }
+
+    fun exportBackup(uri: Uri) = runFileJob(failure = "Couldn't save the backup") {
+        openOutput(uri).use { libraryBackup.export(it) }
+        "Library backed up"
+    }
+
+    fun restoreBackup(uri: Uri) = runFileJob(failure = "Couldn't restore that file") {
+        val summary = openInput(uri).use { libraryBackup.restore(it) }
+        // Restored settings may flip Wi-Fi-only; the download manager has to hear about it.
+        withContext(Dispatchers.Main) {
+            downloadManager.requirements = downloadRequirements(appSettingsStore.current.wifiOnlyDownloads)
+        }
+        buildList {
+            if (summary.watchLater > 0) add("${summary.watchLater} saved")
+            if (summary.progress > 0) add("${summary.progress} progress entries")
+            if (summary.hidden > 0) add("${summary.hidden} hidden")
+            if (summary.lists > 0) add("${summary.lists} lists")
+        }.let { parts ->
+            if (parts.isEmpty()) "Restored settings; your library was already up to date"
+            else "Restored " + parts.joinToString(", ")
+        }
+    }
+
+    fun exportDiagnostics(uri: Uri) = runFileJob(failure = "Couldn't save the diagnostics file") {
+        openOutput(uri).use { diagnostics.export(it) }
+        "Diagnostics saved"
+    }
+
+    fun clearCrashReports() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { diagnostics.clearCrashes() }
+            _crashCount.value = 0
+            _messages.tryEmit("Crash reports cleared")
+        }
+    }
+
+    private fun runFileJob(failure: String, block: suspend () -> String) {
+        if (_isWorking.value) return
+        viewModelScope.launch {
+            _isWorking.value = true
+            val message = runCatching { withContext(Dispatchers.IO) { block() } }
+                .getOrElse { error -> (error as? BackupFormatException)?.message ?: failure }
+            _isWorking.value = false
+            _messages.tryEmit(message)
+        }
+    }
+
+    private fun openOutput(uri: Uri) =
+        context.contentResolver.openOutputStream(uri) ?: error("No output stream for $uri")
+
+    private fun openInput(uri: Uri) =
+        context.contentResolver.openInputStream(uri) ?: error("No input stream for $uri")
+
+    fun refresh() {
+        viewModelScope.launch {
+            runCatching { extensionRepository.refresh(force = true) }
+        }
+    }
+
+    fun setThemeMode(mode: ThemeMode) = appSettingsStore.update { it.copy(themeMode = mode) }
+
+    fun setDynamicColor(enabled: Boolean) = appSettingsStore.update { it.copy(dynamicColor = enabled) }
+
+    fun setDnsProvider(provider: DnsProvider) = appSettingsStore.update { it.copy(dnsProvider = provider) }
+
+    fun setSeekStep(seconds: Int) = appSettingsStore.update { it.copy(seekStepSeconds = seconds) }
+
+    fun setDefaultSpeed(speed: Float) = appSettingsStore.update { it.copy(defaultSpeed = speed) }
+
+    fun setAutoPlayNext(enabled: Boolean) = appSettingsStore.update { it.copy(autoPlayNext = enabled) }
+
+    fun setDownloadMaxHeight(height: Int) = appSettingsStore.update { it.copy(downloadMaxHeight = height) }
+
+    fun setPipLeftAction(action: PipAction) = appSettingsStore.update { it.copy(pipLeftAction = action) }
+
+    fun setPipRightAction(action: PipAction) = appSettingsStore.update { it.copy(pipRightAction = action) }
+
+    fun setWifiOnlyDownloads(wifiOnly: Boolean) {
+        appSettingsStore.update { it.copy(wifiOnlyDownloads = wifiOnly) }
+        downloadManager.requirements = downloadRequirements(wifiOnly)
+    }
+
+    fun clearImageCache() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                val loader = SingletonImageLoader.get(context)
+                loader.memoryCache?.clear()
+                loader.diskCache?.clear()
+            }
+            refreshImageCacheSize()
+            _messages.tryEmit("Image cache cleared")
+        }
+    }
+
+    fun clearWatchHistory() {
+        viewModelScope.launch {
+            watchProgressRepository.clearAll()
+            _messages.tryEmit("Watch history and progress cleared")
+        }
+    }
+
+    fun unhideAllTitles() {
+        viewModelScope.launch {
+            hiddenTitlesRepository.unhideAll()
+            _messages.tryEmit("Hidden titles are back on Home")
+        }
+    }
+
+    private fun refreshImageCacheSize() {
+        viewModelScope.launch {
+            _imageCacheBytes.value = withContext(Dispatchers.IO) {
+                runCatching { SingletonImageLoader.get(context).diskCache?.size }.getOrNull()
+            }
+        }
+    }
+}

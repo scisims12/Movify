@@ -1,0 +1,27 @@
+﻿package com.ivor.movify.data.remote
+
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import retrofit2.http.GET
+
+@Serializable
+data class GithubReleaseDto(
+    @SerialName("tag_name") val tagName: String,
+    @SerialName("name") val name: String? = null,
+    @SerialName("body") val body: String? = null,
+    @SerialName("html_url") val htmlUrl: String,
+    @SerialName("published_at") val publishedAt: String,
+    @SerialName("assets") val assets: List<GithubAssetDto> = emptyList()
+)
+
+@Serializable
+data class GithubAssetDto(
+    @SerialName("name") val name: String,
+    @SerialName("browser_download_url") val downloadUrl: String,
+    @SerialName("size") val size: Long
+)
+
+interface GithubApi {
+    @GET("repos/scisims12/Movify/releases/latest")
+    suspend fun getLatestRelease(): GithubReleaseDto
+}
